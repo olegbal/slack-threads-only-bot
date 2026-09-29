@@ -1,0 +1,26 @@
+[project]
+name = "threads-only-bot"
+version = "0.1.0"
+description = "Slack bot that keeps selected channels threads-only: top-level messages from people are deleted."
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.12"
+dependencies = [
+    "slack-bolt>=1.21,<2",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["threads_only_bot"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
