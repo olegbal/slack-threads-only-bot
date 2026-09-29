@@ -1,0 +1,41 @@
+[Unit]
+Description=Threads Only Slack bot
+Documentation=https://github.com/olegbal/slack-threads-only-bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=threadsbot
+Group=threadsbot
+WorkingDirectory=/opt/threads-only-bot
+# Read by systemd as root before dropping privileges; keep it chmod 600.
+EnvironmentFile=/etc/threads-only-bot/env
+Environment=PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1
+ExecStart=/opt/threads-only-bot/.venv/bin/python -m threads_only_bot
+Restart=always
+RestartSec=5
+
+# The bot only needs outbound HTTPS/WebSocket to Slack.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target

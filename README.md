@@ -51,6 +51,25 @@ docker build -t threads-only-bot .
 docker run -d --restart unless-stopped --env-file .env --name threads-only-bot threads-only-bot
 ```
 
+On a Debian/Ubuntu server with systemd (no Docker), as root:
+
+```bash
+apt-get install -y python3-venv git
+useradd --system --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin threadsbot
+git clone https://github.com/olegbal/slack-threads-only-bot.git /opt/threads-only-bot
+python3 -m venv /opt/threads-only-bot/.venv
+/opt/threads-only-bot/.venv/bin/pip install "slack-bolt>=1.21,<2"
+install -d -m 700 /etc/threads-only-bot
+install -m 600 /path/to/.env /etc/threads-only-bot/env
+cp /opt/threads-only-bot/deploy/threads-only-bot.service /etc/systemd/system/
+systemctl daemon-reload && systemctl enable --now threads-only-bot
+journalctl -u threads-only-bot -f
+```
+
+To update: `cd /opt/threads-only-bot && git pull && systemctl restart threads-only-bot`.
+
+Run only one instance per Slack app: Socket Mode splits events between all connected instances.
+
 ## Environment variables
 
 | Variable | Required | Description |
