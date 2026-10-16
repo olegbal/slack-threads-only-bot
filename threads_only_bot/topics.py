@@ -12,6 +12,7 @@ from slack_sdk.errors import SlackApiError
 from slack_sdk.webhook import WebhookClient
 
 from .config import Config
+from .images import IMAGE_TYPES, MAX_IMAGES, TopicImage, copy_images, image_block, is_supported_image, post_with_retry
 
 log = logging.getLogger(__name__)
 
@@ -22,6 +23,8 @@ TOPIC_BLOCK = "topic"
 TOPIC_INPUT = "topic_text"
 PARTICIPANTS_BLOCK = "participants"
 PARTICIPANTS_INPUT = "participants_select"
+IMAGES_BLOCK = "images"
+IMAGES_INPUT = "images_upload"
 # Keeps the "Close topic" button value (author + participants JSON) under Slack's 2000-char limit.
 MAX_PARTICIPANTS = 50
 
@@ -132,6 +135,19 @@ def topic_modal(channel_id: str, draft: RichText | None = None, **meta: str) -> 
             },
             {
                 "type": "input",
+                "block_id": IMAGES_BLOCK,
+                "optional": True,
+                "label": {"type": "plain_text", "text": "Images"},
+                "hint": {"type": "plain_text", "text": "PNG, JPG or GIF. Shown in the topic under its text."},
+                "element": {
+                    "type": "file_input",
+                    "action_id": IMAGES_INPUT,
+                    "filetypes": sorted(IMAGE_TYPES),
+                    "max_files": MAX_IMAGES,
+                },
+            },
+            {
+                "type": "input",
                 "block_id": PARTICIPANTS_BLOCK,
                 "optional": True,
                 "label": {"type": "plain_text", "text": "Participants"},
@@ -158,7 +174,9 @@ def topic_controls(author_id: str, participants: Sequence[str], closed: bool) ->
     return {"type": "actions", "block_id": TOPIC_ACTIONS_BLOCK, "elements": [button]}
 
 
-def topic_message(author_id: str, body: RichText, participants: Sequence[str] = ()) -> dict[str, Any]:
+def topic_message(
+    author_id: str, body: RichText, participants: Sequence[str] = (), images: Sequence[TopicImage] = ()
+) -> dict[str, Any]:
     preview = rich_text_to_plain(body).strip()
     header = f"Topic by <@{author_id}>"
     # Mentions notify participants and subscribe them to the thread.
@@ -170,6 +188,7 @@ def topic_message(author_id: str, body: RichText, participants: Sequence[str] = 
         "blocks": [
             {"type": "context", "elements": [{"type": "mrkdwn", "text": header}]},
             {"type": "rich_text", "elements": body.get("elements", [])},
+            *(image_block(image) for image in images),
             topic_controls(author_id, others, closed=False),
         ],
     }
@@ -220,6 +239,7 @@ def handle_topic_submission(
     values = view["state"]["values"]
     value: RichText | None = values[TOPIC_BLOCK][TOPIC_INPUT].get("rich_text_value")
     participants: list[str] = values.get(PARTICIPANTS_BLOCK, {}).get(PARTICIPANTS_INPUT, {}).get("selected_users") or []
+    files: list[dict[str, Any]] = values.get(IMAGES_BLOCK, {}).get(IMAGES_INPUT, {}).get("files") or []
 
     if channel not in config.channel_ids:
         ack(response_action="errors", errors={TOPIC_BLOCK: "This channel is no longer managed by the bot."})
@@ -227,19 +247,43 @@ def handle_topic_submission(
     if not value or not rich_text_to_plain(value).strip():
         ack(response_action="errors", errors={TOPIC_BLOCK: "Please enter the topic text."})
         return
-
-    try:
-        client.chat_postMessage(channel=channel, **topic_message(author, value, participants))
-    except SlackApiError as e:
-        error = e.response.get("error")
-        log.error("topic post failed channel=%s user=%s error=%s", channel, author, error)
-        ack(response_action="errors", errors={TOPIC_BLOCK: f"Couldn't publish the topic ({error})."})
+    if not all(is_supported_image(f) for f in files):
+        ack(response_action="errors", errors={IMAGES_BLOCK: "Only PNG, JPG and GIF images are supported."})
         return
 
-    ack()
-    log.info("published topic channel=%s user=%s participants=%d", channel, author, len(participants))
+    if not files:
+        try:
+            client.chat_postMessage(channel=channel, **topic_message(author, value, participants))
+        except SlackApiError as e:
+            error = e.response.get("error")
+            log.error("topic post failed channel=%s user=%s error=%s", channel, author, error)
+            ack(response_action="errors", errors={TOPIC_BLOCK: f"Couldn't publish the topic ({error})."})
+            return
+        ack()
+    else:
+        # Copying images can take longer than the 3 seconds Slack waits for the form, so close it first
+        # and report a failure to the author separately.
+        ack()
+        try:
+            images = copy_images(client, files)
+            post_with_retry(client, channel=channel, **topic_message(author, value, participants, images))
+        except (SlackApiError, OSError) as e:
+            error = e.response.get("error") if isinstance(e, SlackApiError) else str(e)
+            log.error("topic with images failed channel=%s user=%s error=%s", channel, author, error)
+            notify_author(client, channel, author, f"Couldn't publish your topic with images ({error}). Please try again.")
+            return
 
+    log.info(
+        "published topic channel=%s user=%s participants=%d images=%d", channel, author, len(participants), len(files)
+    )
     if meta.get("draft_key"):
         drafts.discard(meta["draft_key"])
     if meta.get("response_url"):
         delete_ephemeral(meta["response_url"])
+
+
+def notify_author(client: WebClient, channel: str, user: str, text: str) -> None:
+    try:
+        client.chat_postEphemeral(channel=channel, user=user, text=text)
+    except SlackApiError as e:
+        log.warning("chat.postEphemeral failed channel=%s user=%s error=%s", channel, user, e.response.get("error"))

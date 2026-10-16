@@ -18,6 +18,7 @@ from slack_sdk import WebClient
 from slack_sdk.errors import SlackApiError
 
 from .config import Config
+from .images import normalize_image_blocks
 from .topics import (
     CLOSE_TOPIC_ACTION,
     REOPEN_TOPIC_ACTION,
@@ -84,7 +85,7 @@ def thread_note(user: str, closed: bool, conclusion: str) -> str:
 
 
 def with_state(blocks: list[dict[str, Any]], state: TopicState, closed: bool, status: dict[str, Any] | None) -> list[dict[str, Any]]:
-    kept = [b for b in blocks if b.get("block_id") not in {TOPIC_STATUS_BLOCK, TOPIC_ACTIONS_BLOCK}]
+    kept = normalize_image_blocks([b for b in blocks if b.get("block_id") not in {TOPIC_STATUS_BLOCK, TOPIC_ACTIONS_BLOCK}])
     return kept + ([status] if status else []) + [topic_controls(state.author, state.participants, closed)]
 
 

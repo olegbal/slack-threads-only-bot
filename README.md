@@ -4,6 +4,7 @@ Keeps selected channels threads-only:
 
 - people reply **only in threads**;
 - a new topic is created with **`/new-topic`**: a form opens, and the bot posts the topic to the channel marked "Topic by @author". Discussion happens in its thread;
+- the form has an optional **Images** field (PNG, JPG or GIF, up to 10). Images are shown inside the topic, under its text;
 - the form has an optional **Participants** field (up to 50 people). They are mentioned in the topic ("Participants: @a, @b") and get notified;
 - every topic has a **Close topic** button. It opens a form with an optional **Conclusion**. Once closed, the topic shows "🔒 Closed by @who, when" plus the conclusion, the button turns into **Reopen**, and a note is posted to the thread;
 - replies in a closed topic's thread are removed, and the author sees an ephemeral notice in the thread (pointing to **Reopen** if they're allowed to use it). Bots and people in `ALLOWED_USER_IDS` can still reply;
@@ -87,7 +88,8 @@ Run only one instance per Slack app: Socket Mode splits events between all conne
 ## Limitations
 
 - Removal happens after the message is posted, so it may flash in the channel for a split second, and a notification about it may already have gone out.
-- Files attached to a removed message stay with the author and are not deleted. The `/new-topic` form accepts text only, no attachments.
+- Files attached to a removed message stay with the author and are not deleted, and the **Create topic** button can't carry them over: add them again in the form's **Images** field.
+- Images from the form are copied: the bot downloads each one and uploads its own private copy, which is shown only inside the topic. The person's original upload stays in their files. Other file types (PDF, WebP, HEIC, …) aren't accepted; attach them in the thread instead.
 - A topic is posted by the bot and marked "Topic by @author"; it doesn't appear as the person's own message.
 - A topic's status, and who may close it, are stored in the topic message itself, so no database is needed. The bot caches statuses in memory so it doesn't fetch the topic on every reply; after a restart it reads them from the messages again. Topics created before this feature have no **Close topic** button.
 - The ephemeral notice disappears after Slack is reloaded and doesn't sync across devices. This is a Slack limitation.
