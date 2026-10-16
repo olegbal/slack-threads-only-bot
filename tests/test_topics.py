@@ -12,6 +12,7 @@ from threads_only_bot.topics import (
     TOPIC_BLOCK,
     TOPIC_INPUT,
     TOPIC_MODAL_CALLBACK,
+    NOT_A_MEMBER,
     DraftStore,
     draft_from_event,
     draft_key,
@@ -26,7 +27,6 @@ CONFIG = Config(
     bot_token="xoxb-test",
     app_token="xapp-test",
     user_token="xoxp-test",
-    channel_ids=frozenset({"C_WATCHED"}),
 )
 
 BODY = {
@@ -109,7 +109,7 @@ def test_draft_store_expires_and_evicts():
 def test_command_in_watched_channel_opens_modal_with_text():
     ack, client = MagicMock(), MagicMock()
 
-    handle_topic_command(ack, {"channel_id": "C_WATCHED", "trigger_id": "T1", "text": "Hello"}, CONFIG, client)
+    handle_topic_command(ack, {"channel_id": "C_WATCHED", "trigger_id": "T1", "text": "Hello"}, client)
 
     ack.assert_called_once_with()
     view = modal_view(client)
@@ -121,25 +121,45 @@ def test_command_in_watched_channel_opens_modal_with_text():
 def test_command_without_text_opens_empty_modal():
     ack, client = MagicMock(), MagicMock()
 
-    handle_topic_command(ack, {"channel_id": "C_WATCHED", "trigger_id": "T1", "text": ""}, CONFIG, client)
+    handle_topic_command(ack, {"channel_id": "C_WATCHED", "trigger_id": "T1", "text": ""}, client)
 
     assert "initial_value" not in modal_view(client)["blocks"][1]["element"]
 
 
-def test_command_elsewhere_explains_and_opens_nothing():
+def test_command_where_bot_is_not_a_member_explains_and_opens_nothing():
+    for error in ("not_in_channel", "channel_not_found", "missing_scope"):
+        ack, client = MagicMock(), MagicMock()
+        client.conversations_history.side_effect = SlackApiError("hist", {"ok": False, "error": error})
+
+        handle_topic_command(ack, {"channel_id": "C_OTHER", "trigger_id": "T1", "text": ""}, client)
+
+        assert ack.call_args.kwargs["text"] == NOT_A_MEMBER
+        client.views_open.assert_not_called()
+
+
+def test_command_checks_membership_of_that_channel():
     ack, client = MagicMock(), MagicMock()
 
-    handle_topic_command(ack, {"channel_id": "C_OTHER", "trigger_id": "T1", "text": ""}, CONFIG, client)
+    handle_topic_command(ack, {"channel_id": "C_WATCHED", "trigger_id": "T1", "text": ""}, client)
 
-    assert "<#C_WATCHED>" in ack.call_args.kwargs["text"]
-    client.views_open.assert_not_called()
+    client.conversations_history.assert_called_once_with(channel="C_WATCHED", limit=1)
+    client.views_open.assert_called_once()
+
+
+def test_command_proceeds_when_membership_check_fails_for_other_reasons():
+    ack, client = MagicMock(), MagicMock()
+    client.conversations_history.side_effect = SlackApiError("hist", {"ok": False, "error": "ratelimited"})
+
+    handle_topic_command(ack, {"channel_id": "C_WATCHED", "trigger_id": "T1", "text": ""}, client)
+
+    client.views_open.assert_called_once()
 
 
 def test_button_opens_modal_prefilled_from_remembered_draft():
     ack, client, drafts = MagicMock(), MagicMock(), DraftStore()
     drafts.put(KEY, BODY)
 
-    handle_create_topic_action(ack, button_click(), CONFIG, client, drafts)
+    handle_create_topic_action(ack, button_click(), client, drafts)
 
     ack.assert_called_once_with()
     view = modal_view(client)
@@ -154,7 +174,7 @@ def test_button_opens_modal_prefilled_from_remembered_draft():
 def test_button_after_restart_opens_empty_modal():
     ack, client = MagicMock(), MagicMock()
 
-    handle_create_topic_action(ack, button_click(), CONFIG, client, DraftStore())
+    handle_create_topic_action(ack, button_click(), client, DraftStore())
 
     assert "initial_value" not in modal_view(client)["blocks"][1]["element"]
 
@@ -162,7 +182,7 @@ def test_button_after_restart_opens_empty_modal():
 def test_submission_publishes_topic_with_author(deleted_ephemerals):
     ack, client = MagicMock(), MagicMock()
 
-    handle_topic_submission(ack, submission(BODY), CONFIG, client, DraftStore())
+    handle_topic_submission(ack, submission(BODY), client, DraftStore())
 
     ack.assert_called_once_with()
     kwargs = client.chat_postMessage.call_args.kwargs
@@ -177,7 +197,7 @@ def test_submission_from_button_cleans_up_notice_and_draft(deleted_ephemerals):
     ack, client, drafts = MagicMock(), MagicMock(), DraftStore()
     drafts.put(KEY, BODY)
 
-    handle_topic_submission(ack, submission(BODY, draft_key=KEY, response_url="https://r"), CONFIG, client, drafts)
+    handle_topic_submission(ack, submission(BODY, draft_key=KEY, response_url="https://r"), client, drafts)
 
     assert deleted_ephemerals == ["https://r"]
     assert drafts.get(KEY) is None
@@ -186,18 +206,7 @@ def test_submission_from_button_cleans_up_notice_and_draft(deleted_ephemerals):
 def test_submission_rejects_blank_text():
     ack, client = MagicMock(), MagicMock()
 
-    handle_topic_submission(ack, submission(plain_rich_text("   ")), CONFIG, client, DraftStore())
-
-    assert ack.call_args.kwargs["response_action"] == "errors"
-    client.chat_postMessage.assert_not_called()
-
-
-def test_submission_rejects_unwatched_channel():
-    ack, client = MagicMock(), MagicMock()
-    body = submission(BODY)
-    body["view"]["private_metadata"] = json.dumps({"channel": "C_OTHER"})
-
-    handle_topic_submission(ack, body, CONFIG, client, DraftStore())
+    handle_topic_submission(ack, submission(plain_rich_text("   ")), client, DraftStore())
 
     assert ack.call_args.kwargs["response_action"] == "errors"
     client.chat_postMessage.assert_not_called()
@@ -208,9 +217,9 @@ def test_failed_post_keeps_notice_and_shows_error(deleted_ephemerals):
     drafts.put(KEY, BODY)
     client.chat_postMessage.side_effect = SlackApiError("post", {"ok": False, "error": "not_in_channel"})
 
-    handle_topic_submission(ack, submission(BODY, draft_key=KEY, response_url="https://r"), CONFIG, client, drafts)
+    handle_topic_submission(ack, submission(BODY, draft_key=KEY, response_url="https://r"), client, drafts)
 
-    assert "not_in_channel" in ack.call_args.kwargs["errors"][TOPIC_BLOCK]
+    assert "/invite @threads-only" in ack.call_args.kwargs["errors"][TOPIC_BLOCK]
     assert deleted_ephemerals == []
     assert drafts.get(KEY) == BODY
 
@@ -218,7 +227,7 @@ def test_failed_post_keeps_notice_and_shows_error(deleted_ephemerals):
 def test_modal_has_optional_participants_picker():
     ack, client = MagicMock(), MagicMock()
 
-    handle_topic_command(ack, {"channel_id": "C_WATCHED", "trigger_id": "T1", "text": ""}, CONFIG, client)
+    handle_topic_command(ack, {"channel_id": "C_WATCHED", "trigger_id": "T1", "text": ""}, client)
 
     block = next(b for b in modal_view(client)["blocks"] if b.get("block_id") == PARTICIPANTS_BLOCK)
     assert block["optional"] is True
@@ -230,7 +239,7 @@ def test_submission_mentions_participants_without_author_and_duplicates(deleted_
     ack, client = MagicMock(), MagicMock()
 
     handle_topic_submission(
-        ack, submission(BODY, participants=["U_A", "U_AUTHOR", "U_B", "U_A"]), CONFIG, client, DraftStore()
+        ack, submission(BODY, participants=["U_A", "U_AUTHOR", "U_B", "U_A"]), client, DraftStore()
     )
 
     kwargs = client.chat_postMessage.call_args.kwargs
@@ -242,6 +251,15 @@ def test_submission_mentions_participants_without_author_and_duplicates(deleted_
 def test_submission_with_empty_participants_has_plain_header(deleted_ephemerals):
     ack, client = MagicMock(), MagicMock()
 
-    handle_topic_submission(ack, submission(BODY, participants=[]), CONFIG, client, DraftStore())
+    handle_topic_submission(ack, submission(BODY, participants=[]), client, DraftStore())
 
     assert client.chat_postMessage.call_args.kwargs["blocks"][0]["elements"][0]["text"] == "Topic by <@U_AUTHOR>"
+
+
+def test_other_post_errors_are_shown_as_is():
+    ack, client = MagicMock(), MagicMock()
+    client.chat_postMessage.side_effect = SlackApiError("post", {"ok": False, "error": "msg_too_long"})
+
+    handle_topic_submission(ack, submission(BODY), client, DraftStore())
+
+    assert "msg_too_long" in ack.call_args.kwargs["errors"][TOPIC_BLOCK]

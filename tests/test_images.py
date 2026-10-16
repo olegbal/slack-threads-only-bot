@@ -33,7 +33,6 @@ CONFIG = Config(
     bot_token="xoxb-test",
     app_token="xapp-test",
     user_token="xoxp-test",
-    channel_ids=frozenset({"C_WATCHED"}),
 )
 
 
@@ -89,7 +88,7 @@ def test_supported_image_types():
 def test_modal_has_optional_image_upload():
     client = MagicMock()
 
-    handle_topic_command(MagicMock(), {"channel_id": "C_WATCHED", "trigger_id": "T1", "text": ""}, CONFIG, client)
+    handle_topic_command(MagicMock(), {"channel_id": "C_WATCHED", "trigger_id": "T1", "text": ""}, client)
 
     view = client.views_open.call_args.kwargs["view"]
     block = next(b for b in view["blocks"] if b.get("block_id") == IMAGES_BLOCK)
@@ -117,7 +116,7 @@ def test_copy_images_downloads_with_bot_token_and_uploads_privately(downloads):
 def test_submission_with_images_closes_form_then_posts_topic_with_image_blocks(downloads):
     ack, client = MagicMock(), bot_client()
 
-    handle_topic_submission(ack, submission([uploaded("F_USER1", "a.png")]), CONFIG, client, DraftStore())
+    handle_topic_submission(ack, submission([uploaded("F_USER1", "a.png")]), client, DraftStore())
 
     ack.assert_called_once_with()
     blocks = client.chat_postMessage.call_args.kwargs["blocks"]
@@ -133,7 +132,7 @@ def test_submission_with_images_closes_form_then_posts_topic_with_image_blocks(d
 def test_submission_without_images_has_no_image_blocks():
     client = MagicMock()
 
-    handle_topic_submission(MagicMock(), submission([]), CONFIG, client, DraftStore())
+    handle_topic_submission(MagicMock(), submission([]), client, DraftStore())
 
     assert "image" not in [b["type"] for b in client.chat_postMessage.call_args.kwargs["blocks"]]
     client.files_upload_v2.assert_not_called()
@@ -142,7 +141,7 @@ def test_submission_without_images_has_no_image_blocks():
 def test_unsupported_file_is_rejected_in_the_form():
     ack, client = MagicMock(), bot_client()
 
-    handle_topic_submission(ack, submission([uploaded(name="doc.pdf", filetype="pdf")]), CONFIG, client, DraftStore())
+    handle_topic_submission(ack, submission([uploaded(name="doc.pdf", filetype="pdf")]), client, DraftStore())
 
     assert IMAGES_BLOCK in ack.call_args.kwargs["errors"]
     client.files_upload_v2.assert_not_called()
@@ -153,7 +152,7 @@ def test_image_failure_is_reported_to_author(downloads):
     ack, client = MagicMock(), bot_client()
     client.files_upload_v2.side_effect = SlackApiError("up", {"ok": False, "error": "missing_scope"})
 
-    handle_topic_submission(ack, submission([uploaded()]), CONFIG, client, DraftStore())
+    handle_topic_submission(ack, submission([uploaded()]), client, DraftStore())
 
     ack.assert_called_once_with()
     client.chat_postMessage.assert_not_called()
@@ -169,7 +168,7 @@ def test_download_failure_is_reported_to_author(monkeypatch):
     monkeypatch.setattr(images, "download", broken)
     client = bot_client()
 
-    handle_topic_submission(MagicMock(), submission([uploaded()]), CONFIG, client, DraftStore())
+    handle_topic_submission(MagicMock(), submission([uploaded()]), client, DraftStore())
 
     assert "HTML page" in client.chat_postEphemeral.call_args.kwargs["text"]
 

@@ -1,6 +1,8 @@
 # Threads Only — Slack bot
 
-Keeps selected channels threads-only:
+Keeps channels threads-only. The bot manages **every channel it's a member of**: invite it with `/invite @threads-only` to turn a channel threads-only, remove it from the channel (*Integrations → Remove app*) to turn that off. There's no channel list to configure.
+
+In a managed channel:
 
 - people reply **only in threads**;
 - a new topic is created with **`/new-topic`**: a form opens, and the bot posts the topic to the channel marked "Topic by @author". Discussion happens in its thread;
@@ -28,15 +30,14 @@ or admin**, and the bot deletes messages on their behalf.
 3. **Install App** → install it **while signed in as a workspace owner or admin**. Then copy:
    - *Bot User OAuth Token* → `SLACK_BOT_TOKEN` (`xoxb-…`);
    - *User OAuth Token* → `SLACK_ADMIN_USER_TOKEN` (`xoxp-…`).
-4. Invite the bot to every channel it should manage: `/invite @threads-only`. Without this Slack doesn't send the bot any messages from the channel. In private channels, the admin who installed the app must be a member too.
-5. Channel ID: *Channel details* → bottom of the dialog (`C…`). List them in `CHANNEL_IDS`.
+4. Invite the bot to every channel it should manage: `/invite @threads-only`. In private channels, the admin who installed the app must be a member too, otherwise the bot can't delete messages there.
 
 **If the app was created from an older manifest:** **App Manifest** → paste the new [`manifest.yml`](manifest.yml) → **Save Changes** → **Install App → Reinstall to Workspace** as the same admin. Tokens usually stay the same after reinstalling; if they change, update `.env`.
 
 ## Running
 
 ```bash
-cp .env.example .env   # fill in the tokens and CHANNEL_IDS
+cp .env.example .env   # fill in the tokens
 ```
 
 Locally:
@@ -79,7 +80,6 @@ Run only one instance per Slack app: Socket Mode splits events between all conne
 | `SLACK_BOT_TOKEN` | yes | `xoxb-…`, receives events, publishes topics and ephemeral notices |
 | `SLACK_APP_TOKEN` | yes | `xapp-…`, for Socket Mode |
 | `SLACK_ADMIN_USER_TOKEN` | yes | `xoxp-…` of a workspace owner or admin, deletes messages |
-| `CHANNEL_IDS` | yes | Comma-separated channel IDs |
 | `ALLOWED_USER_IDS` | no | People who may post directly to the channel, reply in closed topics, and close or reopen any topic (comma-separated IDs) |
 | `ALLOW_THREAD_BROADCAST` | no | `true` keeps replies sent with "Also send to channel" |
 | `NOTICE_TEXT` | no | First line of the ephemeral notice shown when a message is removed. The `/new-topic` hint is always appended |
@@ -87,6 +87,7 @@ Run only one instance per Slack app: Socket Mode splits events between all conne
 
 ## Limitations
 
+- Anyone who can invite the bot to a channel can make that channel threads-only. Keep that in mind before inviting it to busy shared channels.
 - Removal happens after the message is posted, so it may flash in the channel for a split second, and a notification about it may already have gone out.
 - Files attached to a removed message stay with the author and are not deleted, and the **Create topic** button can't carry them over: add them again in the form's **Images** field.
 - Images from the form are copied: the bot downloads each one and uploads its own private copy, which is shown only inside the topic. The person's original upload stays in their files. Other file types (PDF, WebP, HEIC, …) aren't accepted; attach them in the thread instead.

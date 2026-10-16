@@ -9,7 +9,9 @@ USER_POST_SUBTYPES: frozenset[str | None] = frozenset({None, "file_share", "me_m
 
 
 def _is_restricted_human_post(event: Mapping[str, Any], config: Config) -> bool:
-    if event.get("channel") not in config.channel_ids:
+    # Slack only sends the bot message events from channels it's a member of, so being invited
+    # is what puts a channel under the threads-only rule. DMs are never touched.
+    if event.get("channel_type") not in {None, "channel", "group"}:
         return False
     if event.get("subtype") not in USER_POST_SUBTYPES:
         return False

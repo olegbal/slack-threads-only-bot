@@ -32,7 +32,6 @@ CONFIG = Config(
     bot_token="xoxb-test",
     app_token="xapp-test",
     user_token="xoxp-test",
-    channel_ids=frozenset({"C_WATCHED"}),
     allowed_user_ids=frozenset({"U_ADMIN"}),
 )
 TS = "200.000"

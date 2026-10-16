@@ -11,7 +11,6 @@ from slack_sdk import WebClient
 from slack_sdk.errors import SlackApiError
 from slack_sdk.webhook import WebhookClient
 
-from .config import Config
 from .images import IMAGE_TYPES, MAX_IMAGES, TopicImage, copy_images, image_block, is_supported_image, post_with_retry
 
 log = logging.getLogger(__name__)
@@ -194,8 +193,30 @@ def topic_message(
     }
 
 
-def channels_hint(config: Config) -> str:
-    return ", ".join(f"<#{channel}>" for channel in sorted(config.channel_ids))
+NOT_A_MEMBER = (
+    f"{TOPIC_COMMAND} works only in channels where @threads-only is a member. "
+    "Invite it with `/invite @threads-only` to make the channel threads-only."
+)
+NOT_IN_CHANNEL_ERRORS = frozenset({"not_in_channel", "channel_not_found"})
+
+
+def bot_is_member(client: WebClient, channel: str) -> bool:
+    """Whether the bot is in the channel, i.e. whether the channel is threads-only."""
+    try:
+        client.conversations_history(channel=channel, limit=1)
+    except SlackApiError as e:
+        error = e.response.get("error")
+        # missing_scope: a DM or group DM, which the bot never reads.
+        if error in NOT_IN_CHANNEL_ERRORS or error == "missing_scope":
+            return False
+        log.warning("membership check failed channel=%s error=%s", channel, error)
+    return True
+
+
+def describe_error(error: str | None) -> str:
+    if error in NOT_IN_CHANNEL_ERRORS:
+        return "@threads-only is no longer in this channel. Invite it back with `/invite @threads-only`."
+    return f"Couldn't publish the topic ({error})."
 
 
 def delete_ephemeral(response_url: str) -> None:
@@ -205,33 +226,27 @@ def delete_ephemeral(response_url: str) -> None:
         log.warning("failed to remove ephemeral notice: %s", e)
 
 
-def handle_topic_command(ack: Ack, command: Mapping[str, Any], config: Config, client: WebClient) -> None:
+def handle_topic_command(ack: Ack, command: Mapping[str, Any], client: WebClient) -> None:
     channel = command["channel_id"]
-    if channel not in config.channel_ids:
-        ack(text=f"{TOPIC_COMMAND} only works in: {channels_hint(config)}")
+    if not bot_is_member(client, channel):
+        ack(text=NOT_A_MEMBER)
         return
     ack()
     text = (command.get("text") or "").strip()
     client.views_open(trigger_id=command["trigger_id"], view=topic_modal(channel, plain_rich_text(text) if text else None))
 
 
-def handle_create_topic_action(
-    ack: Ack, body: Mapping[str, Any], config: Config, client: WebClient, drafts: DraftStore
-) -> None:
+def handle_create_topic_action(ack: Ack, body: Mapping[str, Any], client: WebClient, drafts: DraftStore) -> None:
     ack()
     key = body["actions"][0]["value"]
     channel = key.split("/", 1)[0]
-    if channel not in config.channel_ids:
-        return
     meta = {"draft_key": key}
     if body.get("response_url"):
         meta["response_url"] = body["response_url"]
     client.views_open(trigger_id=body["trigger_id"], view=topic_modal(channel, drafts.get(key), **meta))
 
 
-def handle_topic_submission(
-    ack: Ack, body: Mapping[str, Any], config: Config, client: WebClient, drafts: DraftStore
-) -> None:
+def handle_topic_submission(ack: Ack, body: Mapping[str, Any], client: WebClient, drafts: DraftStore) -> None:
     view = body["view"]
     meta = json.loads(view["private_metadata"])
     channel = meta["channel"]
@@ -241,9 +256,6 @@ def handle_topic_submission(
     participants: list[str] = values.get(PARTICIPANTS_BLOCK, {}).get(PARTICIPANTS_INPUT, {}).get("selected_users") or []
     files: list[dict[str, Any]] = values.get(IMAGES_BLOCK, {}).get(IMAGES_INPUT, {}).get("files") or []
 
-    if channel not in config.channel_ids:
-        ack(response_action="errors", errors={TOPIC_BLOCK: "This channel is no longer managed by the bot."})
-        return
     if not value or not rich_text_to_plain(value).strip():
         ack(response_action="errors", errors={TOPIC_BLOCK: "Please enter the topic text."})
         return
@@ -257,7 +269,7 @@ def handle_topic_submission(
         except SlackApiError as e:
             error = e.response.get("error")
             log.error("topic post failed channel=%s user=%s error=%s", channel, author, error)
-            ack(response_action="errors", errors={TOPIC_BLOCK: f"Couldn't publish the topic ({error})."})
+            ack(response_action="errors", errors={TOPIC_BLOCK: describe_error(error)})
             return
         ack()
     else:
@@ -270,7 +282,10 @@ def handle_topic_submission(
         except (SlackApiError, OSError) as e:
             error = e.response.get("error") if isinstance(e, SlackApiError) else str(e)
             log.error("topic with images failed channel=%s user=%s error=%s", channel, author, error)
-            notify_author(client, channel, author, f"Couldn't publish your topic with images ({error}). Please try again.")
+            text = describe_error(error) if error in NOT_IN_CHANNEL_ERRORS else (
+                f"Couldn't publish your topic with images ({error}). Please try again."
+            )
+            notify_author(client, channel, author, text)
             return
 
     log.info(

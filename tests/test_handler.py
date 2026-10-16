@@ -12,7 +12,6 @@ CONFIG = Config(
     bot_token="xoxb-test",
     app_token="xapp-test",
     user_token="xoxp-test",
-    channel_ids=frozenset({"C_WATCHED"}),
     notice_text="Threads only.",
 )
 

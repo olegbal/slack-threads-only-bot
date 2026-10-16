@@ -6,14 +6,12 @@ BASE_ENV = {
     "SLACK_BOT_TOKEN": "xoxb-1",
     "SLACK_APP_TOKEN": "xapp-1",
     "SLACK_ADMIN_USER_TOKEN": "xoxp-1",
-    "CHANNEL_IDS": " C1, C2 ,,",
 }
 
 
 def test_loads_minimal_env():
     config = load_config(BASE_ENV)
 
-    assert config.channel_ids == {"C1", "C2"}
     assert config.allowed_user_ids == frozenset()
     assert config.allow_thread_broadcast is False
     assert config.notice_text == DEFAULT_NOTICE
@@ -29,9 +27,8 @@ def test_optional_settings():
     assert config.notice_text == "Custom"
 
 
-def test_requires_channels():
-    with pytest.raises(ConfigError, match="CHANNEL_IDS"):
-        load_config({**BASE_ENV, "CHANNEL_IDS": ""})
+def test_channel_list_is_not_needed():
+    assert load_config({**BASE_ENV, "CHANNEL_IDS": "C1,C2"}) == load_config(BASE_ENV)
 
 
 def test_rejects_bot_token_in_admin_slot():

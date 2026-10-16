@@ -9,7 +9,6 @@ CONFIG = Config(
     bot_token="xoxb-test",
     app_token="xapp-test",
     user_token="xoxp-test",
-    channel_ids=frozenset({"C_WATCHED"}),
 )
 
 
@@ -35,8 +34,14 @@ def test_file_share_in_thread_is_allowed():
     assert not is_violation(msg(subtype="file_share", thread_ts="50.000"), CONFIG)
 
 
-def test_unwatched_channel_is_ignored():
-    assert not is_violation(msg(channel="C_OTHER"), CONFIG)
+def test_any_channel_the_bot_is_in_is_threads_only():
+    assert is_violation(msg(channel="C_ANY", channel_type="channel"), CONFIG)
+    assert is_violation(msg(channel="G_PRIVATE", channel_type="group"), CONFIG)
+
+
+def test_direct_messages_are_ignored():
+    assert not is_violation(msg(channel="D1", channel_type="im"), CONFIG)
+    assert not is_violation(msg(channel="G1", channel_type="mpim"), CONFIG)
 
 
 @pytest.mark.parametrize(
@@ -76,7 +81,7 @@ def test_thread_reply_detection():
     assert not is_thread_reply(msg(), CONFIG)
     assert not is_thread_reply(msg(thread_ts="100.000"), CONFIG)  # the parent itself
     assert not is_thread_reply(msg(thread_ts="50.000", bot_id="B1"), CONFIG)
-    assert not is_thread_reply(msg(thread_ts="50.000", channel="C_OTHER"), CONFIG)
+    assert not is_thread_reply(msg(thread_ts="50.000", channel="D1", channel_type="im"), CONFIG)
     assert not is_thread_reply(msg(thread_ts="50.000", subtype="message_changed"), CONFIG)
 
 

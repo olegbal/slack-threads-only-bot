@@ -32,18 +32,6 @@ from .topics import (
 )
 
 
-def warn_about_unreachable_channels(client: WebClient, channel_ids: frozenset[str], log: logging.Logger) -> None:
-    # Slack only delivers message events from channels the bot user has joined, so a missing
-    # /invite looks exactly like "nothing happens".
-    for channel in sorted(channel_ids):
-        try:
-            client.conversations_history(channel=channel, limit=1)
-        except SlackApiError as e:
-            error = e.response.get("error")
-            hint = " (run /invite @threads-only in that channel)" if error in {"not_in_channel", "channel_not_found"} else ""
-            log.warning("channel %s is not reachable by the bot: %s%s", channel, error, hint)
-
-
 def main() -> None:
     logging.basicConfig(
         level=os.environ.get("LOG_LEVEL", "INFO").upper(),
@@ -73,15 +61,15 @@ def main() -> None:
 
     @app.command(TOPIC_COMMAND)
     def on_topic_command(ack: Ack, command: dict[str, Any], client: WebClient) -> None:
-        handle_topic_command(ack, command, config, client)
+        handle_topic_command(ack, command, client)
 
     @app.action(CREATE_TOPIC_ACTION)
     def on_create_topic(ack: Ack, body: dict[str, Any], client: WebClient) -> None:
-        handle_create_topic_action(ack, body, config, client, drafts)
+        handle_create_topic_action(ack, body, client, drafts)
 
     @app.view(TOPIC_MODAL_CALLBACK)
     def on_topic_submit(ack: Ack, body: dict[str, Any], client: WebClient) -> None:
-        handle_topic_submission(ack, body, config, client, drafts)
+        handle_topic_submission(ack, body, client, drafts)
 
     @app.action(CLOSE_TOPIC_ACTION)
     def on_close_click(ack: Ack, body: dict[str, Any], client: WebClient) -> None:
@@ -96,8 +84,9 @@ def main() -> None:
         handle_close_submission(ack, body, config, client, topics)
 
     log = logging.getLogger(__name__)
-    log.info("deleting as user %s, watching channels: %s", admin["user_id"], ", ".join(sorted(config.channel_ids)))
-    warn_about_unreachable_channels(app.client, config.channel_ids, log)
+    log.info("deleting as user %s; managing every channel the bot is a member of", admin["user_id"])
+    if os.environ.get("CHANNEL_IDS"):
+        log.warning("CHANNEL_IDS is no longer used: invite the bot to a channel to manage it, remove it to stop")
     SocketModeHandler(app, config.app_token).start()
 
 
