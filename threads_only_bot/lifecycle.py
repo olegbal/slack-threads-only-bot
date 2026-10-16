@@ -2,13 +2,15 @@
 
 The topic message itself holds the state: the Close/Reopen button carries author and participants,
 and a status block shows who closed it and why. No storage needed, and it survives restarts.
+Replies in a closed topic's thread are removed (see handler.py).
 """
 
 import json
 import logging
 import time
+from collections import OrderedDict
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from typing import Any
 
@@ -118,8 +120,44 @@ def fetch_message(client: WebClient, channel: str, ts: str) -> dict[str, Any] | 
     return messages[0] if messages and messages[0].get("ts") == ts else None
 
 
+class TopicCache:
+    """Remembers which threads are bot topics and whether they're closed.
+
+    Every human thread reply needs this answer, so it's cached instead of fetching the parent each time.
+    Only this bot changes a topic's status, and it updates the cache when it does; after a restart
+    entries are simply fetched again from the topic messages.
+    """
+
+    def __init__(self, max_items: int = 5000):
+        self._items: OrderedDict[str, TopicState | None] = OrderedDict()
+        self._max_items = max_items
+
+    def lookup(self, client: WebClient, channel: str, ts: str) -> TopicState | None:
+        key = f"{channel}/{ts}"
+        if key in self._items:
+            self._items.move_to_end(key)
+            return self._items[key]
+        try:
+            message = fetch_message(client, channel, ts)
+        except SlackApiError as e:
+            # Not cached: a transient error must not mark a closed topic as open for good.
+            log.warning("topic lookup failed channel=%s ts=%s error=%s", channel, ts, e.response.get("error"))
+            return None
+        state = topic_state(message.get("blocks", [])) if message else None
+        self.remember(channel, ts, state)
+        return state
+
+    def remember(self, channel: str, ts: str, state: TopicState | None) -> None:
+        key = f"{channel}/{ts}"
+        self._items[key] = state
+        self._items.move_to_end(key)
+        while len(self._items) > self._max_items:
+            self._items.popitem(last=False)
+
+
 def apply_state(
     client: WebClient,
+    topics: TopicCache,
     channel: str,
     message: Mapping[str, Any],
     state: TopicState,
@@ -142,6 +180,7 @@ def apply_state(
         notify(client, channel, user, "Couldn't update the topic status, please try again.")
         return
 
+    topics.remember(channel, ts, replace(state, closed=closed))
     log.info("topic %s channel=%s ts=%s by=%s", "closed" if closed else "reopened", channel, ts, user)
     try:
         # A note in the thread keeps the history and notifies everyone following it.
@@ -181,7 +220,9 @@ def handle_close_click(ack: Ack, body: Mapping[str, Any], config: Config, client
     client.views_open(trigger_id=body["trigger_id"], view=close_modal(channel, message["ts"]))
 
 
-def handle_reopen_click(ack: Ack, body: Mapping[str, Any], config: Config, client: WebClient) -> None:
+def handle_reopen_click(
+    ack: Ack, body: Mapping[str, Any], config: Config, client: WebClient, topics: TopicCache
+) -> None:
     ack()
     clicked = _clicked_topic(body, config, client)
     if clicked is None:
@@ -189,10 +230,12 @@ def handle_reopen_click(ack: Ack, body: Mapping[str, Any], config: Config, clien
     channel, message, state = clicked
     if not state.closed:
         return
-    apply_state(client, channel, message, state, body["user"]["id"], closed=False)
+    apply_state(client, topics, channel, message, state, body["user"]["id"], closed=False)
 
 
-def handle_close_submission(ack: Ack, body: Mapping[str, Any], config: Config, client: WebClient) -> None:
+def handle_close_submission(
+    ack: Ack, body: Mapping[str, Any], config: Config, client: WebClient, topics: TopicCache
+) -> None:
     view = body["view"]
     meta = json.loads(view["private_metadata"])
     channel, ts = meta["channel"], meta["ts"]
@@ -215,5 +258,6 @@ def handle_close_submission(ack: Ack, body: Mapping[str, Any], config: Config, c
         return
     ack()
     if state.closed:
+        topics.remember(channel, ts, state)
         return
-    apply_state(client, channel, message, state, user, closed=True, conclusion=conclusion)
+    apply_state(client, topics, channel, message, state, user, closed=True, conclusion=conclusion)

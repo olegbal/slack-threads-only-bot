@@ -6,7 +6,8 @@ from slack_sdk import WebClient
 from slack_sdk.errors import SlackApiError
 
 from .config import Config
-from .policy import is_violation
+from .lifecycle import TopicCache, TopicState, can_manage
+from .policy import is_thread_reply, is_violation
 from .topics import CREATE_TOPIC_ACTION, TOPIC_COMMAND, DraftStore, draft_from_event, draft_key
 
 log = logging.getLogger(__name__)
@@ -15,6 +16,7 @@ BROADCAST_NOTICE = (
     "Thread replies in this channel can't also be sent to the channel, so your reply was removed. "
     "Send it again without “Also send to channel”."
 )
+CLOSED_NOTICE = "This topic is closed, so your reply was removed."
 
 
 def build_notice(event: Mapping[str, Any], config: Config) -> dict[str, Any]:
@@ -43,27 +45,63 @@ def build_notice(event: Mapping[str, Any], config: Config) -> dict[str, Any]:
     return {"text": lead, "blocks": blocks}
 
 
+def closed_topic_notice(user: str, state: TopicState, config: Config) -> str:
+    if can_manage(user, state, config):
+        return f"{CLOSED_NOTICE} Reopen it with the *Reopen* button on the topic to continue."
+    return f"{CLOSED_NOTICE} Ask its author or participants to reopen it."
+
+
+def delete_message(admin_client: WebClient, channel: str, ts: str) -> bool:
+    try:
+        admin_client.chat_delete(channel=channel, ts=ts)
+    except SlackApiError as e:
+        # Callers skip the notice then: don't tell the user their message was removed if it wasn't.
+        log.error("chat.delete failed channel=%s ts=%s error=%s", channel, ts, e.response.get("error"))
+        return False
+    return True
+
+
+def post_ephemeral(bot_client: WebClient, **notice: Any) -> None:
+    try:
+        bot_client.chat_postEphemeral(**notice)
+    except SlackApiError as e:
+        log.warning(
+            "chat.postEphemeral failed channel=%s user=%s error=%s",
+            notice.get("channel"),
+            notice.get("user"),
+            e.response.get("error"),
+        )
+
+
 def handle_message(
     event: Mapping[str, Any],
     config: Config,
     bot_client: WebClient,
     admin_client: WebClient,
     drafts: DraftStore,
+    topics: TopicCache,
 ) -> None:
-    if not is_violation(event, config):
-        return
+    if is_violation(event, config):
+        remove_top_level_post(event, config, bot_client, admin_client, drafts)
+    elif is_thread_reply(event, config):
+        state = topics.lookup(bot_client, event["channel"], event["thread_ts"])
+        if state is not None and state.closed:
+            remove_closed_topic_reply(event, state, config, bot_client, admin_client)
 
+
+def remove_top_level_post(
+    event: Mapping[str, Any],
+    config: Config,
+    bot_client: WebClient,
+    admin_client: WebClient,
+    drafts: DraftStore,
+) -> None:
     channel = event["channel"]
     user = event["user"]
     ts = event["ts"]
 
-    try:
-        admin_client.chat_delete(channel=channel, ts=ts)
-    except SlackApiError as e:
-        # Don't tell the user their message was removed if it wasn't.
-        log.error("chat.delete failed channel=%s ts=%s error=%s", channel, ts, e.response.get("error"))
+    if not delete_message(admin_client, channel, ts):
         return
-
     log.info("deleted top-level message channel=%s ts=%s user=%s", channel, ts, user)
 
     draft = draft_from_event(event)
@@ -74,8 +112,23 @@ def handle_message(
     notice: dict[str, Any] = {"channel": channel, "user": user, **build_notice(event, config)}
     if event.get("subtype") == "thread_broadcast":
         notice["thread_ts"] = event["thread_ts"]
+    post_ephemeral(bot_client, **notice)
 
-    try:
-        bot_client.chat_postEphemeral(**notice)
-    except SlackApiError as e:
-        log.warning("chat.postEphemeral failed channel=%s user=%s error=%s", channel, user, e.response.get("error"))
+
+def remove_closed_topic_reply(
+    event: Mapping[str, Any],
+    state: TopicState,
+    config: Config,
+    bot_client: WebClient,
+    admin_client: WebClient,
+) -> None:
+    channel = event["channel"]
+    user = event["user"]
+    ts = event["ts"]
+
+    if not delete_message(admin_client, channel, ts):
+        return
+    log.info("deleted reply in closed topic channel=%s ts=%s user=%s", channel, ts, user)
+
+    text = closed_topic_notice(user, state, config)
+    post_ephemeral(bot_client, channel=channel, user=user, thread_ts=event["thread_ts"], text=text)

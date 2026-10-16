@@ -3,7 +3,7 @@ from dataclasses import replace
 import pytest
 
 from threads_only_bot.config import Config
-from threads_only_bot.policy import is_violation
+from threads_only_bot.policy import is_thread_reply, is_violation
 
 CONFIG = Config(
     bot_token="xoxb-test",
@@ -68,3 +68,18 @@ def test_thread_broadcast_is_violation_by_default():
 def test_thread_broadcast_can_be_allowed():
     config = replace(CONFIG, allow_thread_broadcast=True)
     assert not is_violation(msg(subtype="thread_broadcast", thread_ts="50.000"), config)
+
+
+def test_thread_reply_detection():
+    assert is_thread_reply(msg(thread_ts="50.000"), CONFIG)
+    assert is_thread_reply(msg(subtype="file_share", thread_ts="50.000"), CONFIG)
+    assert not is_thread_reply(msg(), CONFIG)
+    assert not is_thread_reply(msg(thread_ts="100.000"), CONFIG)  # the parent itself
+    assert not is_thread_reply(msg(thread_ts="50.000", bot_id="B1"), CONFIG)
+    assert not is_thread_reply(msg(thread_ts="50.000", channel="C_OTHER"), CONFIG)
+    assert not is_thread_reply(msg(thread_ts="50.000", subtype="message_changed"), CONFIG)
+
+
+def test_allowed_user_reply_is_not_restricted():
+    config = replace(CONFIG, allowed_user_ids=frozenset({"U_PERSON"}))
+    assert not is_thread_reply(msg(thread_ts="50.000"), config)

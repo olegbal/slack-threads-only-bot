@@ -11,7 +11,13 @@ from slack_sdk.http_retry.builtin_handlers import RateLimitErrorRetryHandler
 
 from .config import ConfigError, load_config
 from .handler import handle_message
-from .lifecycle import CLOSE_MODAL_CALLBACK, handle_close_click, handle_close_submission, handle_reopen_click
+from .lifecycle import (
+    CLOSE_MODAL_CALLBACK,
+    TopicCache,
+    handle_close_click,
+    handle_close_submission,
+    handle_reopen_click,
+)
 from .topics import (
     CLOSE_TOPIC_ACTION,
     CREATE_TOPIC_ACTION,
@@ -52,6 +58,7 @@ def main() -> None:
     app = App(token=config.bot_token)
     admin_client = WebClient(token=config.user_token)
     drafts = DraftStore()
+    topics = TopicCache()
     try:
         admin = admin_client.auth_test()
     except SlackApiError as e:
@@ -62,7 +69,7 @@ def main() -> None:
 
     @app.event("message")
     def on_message(event: dict[str, Any]) -> None:
-        handle_message(event, config, app.client, admin_client, drafts)
+        handle_message(event, config, app.client, admin_client, drafts, topics)
 
     @app.command(TOPIC_COMMAND)
     def on_topic_command(ack: Ack, command: dict[str, Any], client: WebClient) -> None:
@@ -82,11 +89,11 @@ def main() -> None:
 
     @app.action(REOPEN_TOPIC_ACTION)
     def on_reopen_click(ack: Ack, body: dict[str, Any], client: WebClient) -> None:
-        handle_reopen_click(ack, body, config, client)
+        handle_reopen_click(ack, body, config, client, topics)
 
     @app.view(CLOSE_MODAL_CALLBACK)
     def on_close_submit(ack: Ack, body: dict[str, Any], client: WebClient) -> None:
-        handle_close_submission(ack, body, config, client)
+        handle_close_submission(ack, body, config, client, topics)
 
     log = logging.getLogger(__name__)
     log.info("deleting as user %s, watching channels: %s", admin["user_id"], ", ".join(sorted(config.channel_ids)))

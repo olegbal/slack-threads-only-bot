@@ -5,7 +5,8 @@ Keeps selected channels threads-only:
 - people reply **only in threads**;
 - a new topic is created with **`/new-topic`**: a form opens, and the bot posts the topic to the channel marked "Topic by @author". Discussion happens in its thread;
 - the form has an optional **Participants** field (up to 50 people). They are mentioned in the topic ("Participants: @a, @b") and get notified;
-- every topic has a **Close topic** button. It opens a form with an optional **Conclusion**. Once closed, the topic shows "🔒 Closed by @who, when" plus the conclusion, the button turns into **Reopen**, and a note is posted to the thread. Closing is a status label only: people can still reply in the thread;
+- every topic has a **Close topic** button. It opens a form with an optional **Conclusion**. Once closed, the topic shows "🔒 Closed by @who, when" plus the conclusion, the button turns into **Reopen**, and a note is posted to the thread;
+- replies in a closed topic's thread are removed, and the author sees an ephemeral notice in the thread (pointing to **Reopen** if they're allowed to use it). Bots and people in `ALLOWED_USER_IDS` can still reply;
 - a topic can be closed and reopened by its author, its participants and anyone in `ALLOWED_USER_IDS`. Everyone else gets an ephemeral "no permission" message;
 - a message posted directly to the channel is removed. In its place the author sees an ephemeral notice (*Only visible to you*) with a **Create topic** button. The button opens the same form, prefilled with that text. Once the topic is published, the notice disappears;
 - a thread reply sent with "Also send to channel" (`thread_broadcast`) is removed by default too, and the ephemeral notice appears in the same thread;
@@ -78,7 +79,7 @@ Run only one instance per Slack app: Socket Mode splits events between all conne
 | `SLACK_APP_TOKEN` | yes | `xapp-…`, for Socket Mode |
 | `SLACK_ADMIN_USER_TOKEN` | yes | `xoxp-…` of a workspace owner or admin, deletes messages |
 | `CHANNEL_IDS` | yes | Comma-separated channel IDs |
-| `ALLOWED_USER_IDS` | no | People who may post directly to the channel and close or reopen any topic (comma-separated IDs) |
+| `ALLOWED_USER_IDS` | no | People who may post directly to the channel, reply in closed topics, and close or reopen any topic (comma-separated IDs) |
 | `ALLOW_THREAD_BROADCAST` | no | `true` keeps replies sent with "Also send to channel" |
 | `NOTICE_TEXT` | no | First line of the ephemeral notice shown when a message is removed. The `/new-topic` hint is always appended |
 | `LOG_LEVEL` | no | Defaults to `INFO` |
@@ -88,7 +89,7 @@ Run only one instance per Slack app: Socket Mode splits events between all conne
 - Removal happens after the message is posted, so it may flash in the channel for a split second, and a notification about it may already have gone out.
 - Files attached to a removed message stay with the author and are not deleted. The `/new-topic` form accepts text only, no attachments.
 - A topic is posted by the bot and marked "Topic by @author"; it doesn't appear as the person's own message.
-- A topic's status, and who may close it, are stored in the topic message itself, so no database is needed. Topics created before this feature have no **Close topic** button.
+- A topic's status, and who may close it, are stored in the topic message itself, so no database is needed. The bot caches statuses in memory so it doesn't fetch the topic on every reply; after a restart it reads them from the messages again. Topics created before this feature have no **Close topic** button.
 - The ephemeral notice disappears after Slack is reloaded and doesn't sync across devices. This is a Slack limitation.
 - The removed message's text used by the **Create topic** button is kept in the bot's memory for up to 24 hours. After a bot restart the form opens empty, and the original text can't be recovered.
 - If the admin whose token is used loses their permissions, removal stops working. The logs will show `chat.delete failed ... error=cant_delete_message`.

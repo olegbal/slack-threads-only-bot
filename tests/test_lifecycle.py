@@ -10,6 +10,7 @@ from threads_only_bot.lifecycle import (
     NO_PERMISSION,
     CONCLUSION_BLOCK,
     CONCLUSION_INPUT,
+    TopicCache,
     TopicState,
     handle_close_click,
     handle_close_submission,
@@ -122,7 +123,7 @@ def test_stranger_gets_ephemeral_refusal():
 def test_close_submission_updates_topic_and_notes_thread():
     ack, client = MagicMock(), client_with(open_topic())
 
-    handle_close_submission(ack, close_submit(conclusion="Resolved <!channel>"), CONFIG, client)
+    handle_close_submission(ack, close_submit(conclusion="Resolved <!channel>"), CONFIG, client, TopicCache())
 
     ack.assert_called_once_with()
     update = client.chat_update.call_args.kwargs
@@ -144,7 +145,7 @@ def test_close_submission_updates_topic_and_notes_thread():
 def test_close_without_conclusion():
     client = client_with(open_topic())
 
-    handle_close_submission(MagicMock(), close_submit(conclusion=""), CONFIG, client)
+    handle_close_submission(MagicMock(), close_submit(conclusion=""), CONFIG, client, TopicCache())
 
     status = client.chat_update.call_args.kwargs["blocks"][-2]["elements"][0]["text"]
     assert "Conclusion" not in status
@@ -154,7 +155,7 @@ def test_close_without_conclusion():
 def test_close_submission_rechecks_permission():
     ack, client = MagicMock(), client_with(open_topic())
 
-    handle_close_submission(ack, close_submit(user="U_STRANGER"), CONFIG, client)
+    handle_close_submission(ack, close_submit(user="U_STRANGER"), CONFIG, client, TopicCache())
 
     assert ack.call_args.kwargs["errors"][CONCLUSION_BLOCK] == NO_PERMISSION
     client.chat_update.assert_not_called()
@@ -163,7 +164,7 @@ def test_close_submission_rechecks_permission():
 def test_close_submission_for_missing_topic_shows_error():
     ack, client = MagicMock(), client_with(None)
 
-    handle_close_submission(ack, close_submit(), CONFIG, client)
+    handle_close_submission(ack, close_submit(), CONFIG, client, TopicCache())
 
     assert ack.call_args.kwargs["response_action"] == "errors"
     client.chat_update.assert_not_called()
@@ -172,7 +173,7 @@ def test_close_submission_for_missing_topic_shows_error():
 def test_already_closed_topic_is_not_closed_twice():
     ack, client = MagicMock(), client_with(closed_topic())
 
-    handle_close_submission(ack, close_submit(), CONFIG, client)
+    handle_close_submission(ack, close_submit(), CONFIG, client, TopicCache())
 
     ack.assert_called_once_with()
     client.chat_update.assert_not_called()
@@ -181,7 +182,7 @@ def test_already_closed_topic_is_not_closed_twice():
 def test_reopen_removes_status_and_restores_close_button():
     client = MagicMock()
 
-    handle_reopen_click(MagicMock(), click(closed_topic(), user="U_PART"), CONFIG, client)
+    handle_reopen_click(MagicMock(), click(closed_topic(), user="U_PART"), CONFIG, client, TopicCache())
 
     blocks = client.chat_update.call_args.kwargs["blocks"]
     assert TOPIC_STATUS_BLOCK not in block_ids(blocks)
@@ -192,7 +193,7 @@ def test_reopen_removes_status_and_restores_close_button():
 def test_reopen_by_stranger_is_refused():
     client = MagicMock()
 
-    handle_reopen_click(MagicMock(), click(closed_topic(), user="U_STRANGER"), CONFIG, client)
+    handle_reopen_click(MagicMock(), click(closed_topic(), user="U_STRANGER"), CONFIG, client, TopicCache())
 
     client.chat_update.assert_not_called()
     assert client.chat_postEphemeral.call_args.kwargs["text"] == NO_PERMISSION
@@ -202,7 +203,7 @@ def test_failed_update_tells_user_and_skips_thread_note():
     client = client_with(open_topic())
     client.chat_update.side_effect = SlackApiError("upd", {"ok": False, "error": "cant_update_message"})
 
-    handle_close_submission(MagicMock(), close_submit(), CONFIG, client)
+    handle_close_submission(MagicMock(), close_submit(), CONFIG, client, TopicCache())
 
     client.chat_postMessage.assert_not_called()
     assert client.chat_postEphemeral.call_args.kwargs["user"] == "U_AUTHOR"
@@ -215,3 +216,40 @@ def test_allowed_users_config_is_respected():
     handle_close_click(MagicMock(), click(open_topic(), user="U_ADMIN"), config, client)
 
     client.views_open.assert_not_called()
+
+
+def test_closing_and_reopening_update_the_topic_cache():
+    topics = TopicCache()
+    client = client_with(open_topic())
+
+    handle_close_submission(MagicMock(), close_submit(), CONFIG, client, topics)
+
+    assert topics.lookup(MagicMock(), "C_WATCHED", TS).closed is True
+
+    handle_reopen_click(MagicMock(), click(closed_topic()), CONFIG, MagicMock(), topics)
+
+    no_fetch = MagicMock()
+    assert topics.lookup(no_fetch, "C_WATCHED", TS).closed is False
+    no_fetch.conversations_history.assert_not_called()
+
+
+def test_failed_close_does_not_mark_topic_closed():
+    topics = TopicCache()
+    client = client_with(open_topic())
+    client.chat_update.side_effect = SlackApiError("upd", {"ok": False, "error": "cant_update_message"})
+
+    handle_close_submission(MagicMock(), close_submit(), CONFIG, client, topics)
+
+    assert topics.lookup(client_with(open_topic()), "C_WATCHED", TS).closed is False
+
+
+def test_topic_cache_evicts_oldest():
+    topics = TopicCache(max_items=2)
+    state = TopicState("U_AUTHOR", (), closed=True)
+    for ts in ("1", "2", "3"):
+        topics.remember("C", ts, state)
+
+    fetcher = client_with(None)
+    assert topics.lookup(fetcher, "C", "1") is None
+    fetcher.conversations_history.assert_called_once()
+    assert topics.lookup(MagicMock(), "C", "3") == state
